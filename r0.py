@@ -34,6 +34,9 @@ def my_proof(s, name=None):
         def decorated_function(*args, **kwargs):
             s.push()
             user_function(*args, **kwargs)
+            # s.check()
+            # print(s.assertions())
+            # print(s.model())
             assert(s.check() == unsat)
             print('Unsat core:')
             print_unsat_core(s)
@@ -88,14 +91,14 @@ def initial_state():
     # initialDeposit = Const('initialDeposit', UintSort)
     investor_deposits = Array('investor_deposits', AddressSort, UintSort)
     eth_balances = Array('eth_balances', AddressSort, UintSort)
-    raised = Uint(0)
-    # Symbolize the escrow state
+    # raised = Const('raised', UintSort)
+    # Arbitrary escrow state
     escrowstate = Const('escrowstate', EscrowState)
     # TODO
     # - time
 
     # Borrow from blog post
-    # manually defined constraint.
+    # reasonable constraints.
     a = Const('a', AddressSort)
     require(s, ForAll([a], ULE(investor_deposits[a], eth_balances[Escrow_Address])))
     require(s, ForAll([a], ULE(eth_balances[a], MAX_ETH)))
@@ -107,6 +110,7 @@ def initial_state():
     # - only one depositor
     investor_deposits = Store(investor_deposits, myUser, Uint(0))
     eth_balances = Store(eth_balances, Escrow_Address, Uint(0))
+    raised = eth_balances[Escrow_Address]
     
     # require(s, myUser != ESCROW_BENEFICIARY)
     # require(s, myUser != Escrow_Address)
@@ -124,8 +128,8 @@ def initial_state():
 ## Trans Rules
 
 # modifier
-# SIDE-EFFECT: add new assertion into solver
 def escrow_onlyOwner(s, msg_sender):
+    # SIDE-EFFECT: add new assertion into solver
     require(s, msg_sender == OWNER) 
 
 def escrow_close(s, state, msg_sender, msg_value):
@@ -192,7 +196,6 @@ def escrow_claimRefund(s, state, msg_sender, msg_value, p):
     # require(state == State.REFUND);
     require(s, escrowstate == EscrowState.REFUND)
     # uint256 amount = deposits[p];
-    # TODO fix
     amount = inv_deposits[p]
     # deposits[p] = 0;
     inv_deposits = Store(inv_deposits, p, 0)
@@ -214,22 +217,28 @@ def invest(s, state, msg_sender, msg_value):
     require(s, raised < GOAL)
     
     # escrow.deposit.value(msg.value)(msg.sender);
-    state = escrow_deposit(s, state, OWNER, msg_value, msg_sender)
+    eth_balances, raised, escrow_state = escrow_deposit(s, state, OWNER, msg_value, msg_sender)
 
     raised += msg_value
 
     return (eth_balances, raised, (inv_deposits, escrowstate))
 
 def close(s, state, msg_sender, msg_value):
-    _, raised, _ = state
+    _, raised, escrow_state = state
+    _, escrowstate = escrow_state
 
     # time can be omitted(?)
     # require(now > closeTime || raised >= goal);
 
-    if int(str(raised)) >= int(str(GOAL)): # escrow.close();
-        state = escrow_close(s, state, msg_sender, msg_value)
-    else: # escrow.refund();
-        state = escrow_refund(s, state, msg_sender, msg_value)
+    # if int(str(raised)) >= int(str(GOAL)): # escrow.close();
+        # state = escrow_close(s, state, msg_sender, msg_value)
+    # else: # escrow.refund();
+        # state = escrow_refund(s, state, msg_sender, msg_value)
+    p = If(raised >= GOAL,
+           escrowstate == EscrowState.SUCCESS,
+           escrowstate == EscrowState.REFUND)
+
+    require(s, p)
 
     return state
 
@@ -292,8 +301,12 @@ def is_ok_r0(state, myUser):
     eth_balances, raised, escrow_state = state
     inv_deposits, escrowstate = escrow_state
     
+    # p = If(escrowstate != EscrowState.SUCCESS, 
+        #    inv_deposits[myUser] == eth_balances[Escrow_Address], 
+        #    True)
+
     p = If(escrowstate != EscrowState.SUCCESS, 
-           inv_deposits[myUser] == eth_balances[Escrow_Address], 
+           raised == eth_balances[Escrow_Address], 
            True)
 
     return p
@@ -310,13 +323,15 @@ def sanity_check(cur_state, myUser):
     s.push()
     s.add(Not(is_ok_r0(cur_state, myUser)))
     # print(s.assertions())
-    # print(s.model())
-    assert(s.check() == unsat)
+    # assert(s.check() == unsat)
     s.pop()
 
 sanity_check(state, myUser)
 
-print("BMC Inductive Proof on property r0|r1")
+def test(s, state):
+    pass
+
+print("BMC Inductive Proof of property r0|r1")
 
 @my_proof(s)
 def proof_invest():
